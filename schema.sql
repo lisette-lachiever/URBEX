@@ -1,4 +1,4 @@
--- Urban Mobility Explorer — Database Schema
+-- Urban Mobility Explorer  Database Schema
 -- I designed this to be fully normalized (3NF) with constraints
 -- and indexes so queries stay fast even at 1.4M rows.
 
@@ -25,7 +25,7 @@ INSERT INTO vendors VALUES
     (1, 'Creative Mobile Technologies, LLC'),
     (2, 'VeriFone Inc.');
 
--- 2. Time Categories  (lookup only — NOT joined at query time) 
+-- 2. Time Categories  (lookup only  NOT joined at query time) 
 CREATE TABLE time_categories (
     category_id   TINYINT UNSIGNED NOT NULL,
     category_name VARCHAR(10)      NOT NULL,
@@ -76,7 +76,7 @@ CREATE TABLE trips (
         FOREIGN KEY (passenger_count) REFERENCES passenger_groups(passenger_count)
         ON DELETE RESTRICT ON UPDATE CASCADE,
 
-    -- Minimal indexes — trips is not the hot table anymore
+    -- Minimal indexes  trips is not the hot table anymore
     INDEX idx_trips_vendor (vendor_id),
     INDEX idx_trips_pax    (passenger_count)
 ) ENGINE=InnoDB;
@@ -124,10 +124,10 @@ CREATE TABLE trip_metrics (
     month                TINYINT UNSIGNED NOT NULL,
     is_weekend           TINYINT(1)       NOT NULL,
 
-    -- Category stored as readable string — eliminates JOIN on time_categories
+    -- Category stored as readable string  eliminates JOIN on time_categories
     time_of_day_category VARCHAR(10)      NOT NULL,   -- ← NEW: 'night'|'morning'|'afternoon'|'evening'
 
-    -- Vendor stored here — eliminates JOIN on trips for vendor filter
+    -- Vendor stored here  eliminates JOIN on trips for vendor filter
     vendor_id            TINYINT UNSIGNED NOT NULL,   -- ← NEW: was only in trips
 
     -- Passenger count stored here for passenger distribution chart (no join needed)
@@ -141,7 +141,7 @@ CREATE TABLE trip_metrics (
 
     --  Indexes 
 
-    -- Trip explorer: ORDER BY pickup_datetime DESC — needs this to avoid filesort
+    -- Trip explorer: ORDER BY pickup_datetime DESC  needs this to avoid filesort
     INDEX idx_metrics_dt_trip (pickup_datetime DESC, trip_id DESC),
 
     -- Trip explorer filters: each filter column + sort columns
@@ -150,24 +150,19 @@ CREATE TABLE trip_metrics (
     INDEX idx_metrics_hour_dt     (hour_of_day,  pickup_datetime DESC, trip_id DESC),
     INDEX idx_metrics_speed_dt    (speed_kmh,    pickup_datetime DESC, trip_id DESC),
 
-    -- Aggregation covering index — satisfies GROUP BY for all chart queries
-    -- in a single B-tree read with no temp table or filesort:
-    --   hourly, weekday, monthly, speed_dist, time_category, weekend_weekday,
-    --   rush_hour, vendors, passengers
-    INDEX idx_metrics_cover_all (
-        hour_of_day,
-        day_of_week,
-        month,
-        is_weekend,
-        time_of_day_category,
-        vendor_id,
-        passenger_count,
-        speed_kmh,
-        distance_km,
-        trip_duration_secs
-    )
+    -- Targeted aggregation indexes  one per common GROUP BY column.
+    -- We replaced the single large covering index that included a VARCHAR(10)
+    -- column (time_of_day_category). A VARCHAR inside an index makes each
+    -- entry much larger than a numeric type, which means more B-tree pages,
+    -- more I/O per scan, and more RAM needed to cache the index.
+    -- Five narrow indexes are faster and use less memory than one fat index.
+    INDEX idx_metrics_agg_hour  (hour_of_day,  speed_kmh, trip_duration_secs),
+    INDEX idx_metrics_agg_dow   (day_of_week,  speed_kmh),
+    INDEX idx_metrics_agg_month (month,        speed_kmh),
+    INDEX idx_metrics_agg_cat   (time_of_day_category, speed_kmh),
+    INDEX idx_metrics_agg_ww    (is_weekend,   speed_kmh, distance_km)
 
-) ENGINE=InnoDB ROW_FORMAT=COMPRESSED;
+) ENGINE=InnoDB;
 
 --  7. Excluded Records 
 CREATE TABLE excluded_records (
