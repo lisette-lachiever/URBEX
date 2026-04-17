@@ -100,20 +100,36 @@ CREATE DATABASE urban_mobility
 ```
 
 ### 2 Configure credentials
-
-Open `backend/config.py`:
-
+ 
+Open `backend/config.py`. We use **environment variables** so that real credentials are never hardcoded in the source file.
+ 
 ```python
 DB_CONFIG = {
-    "host":     "localhost",
-    "port":     3306,
-    "user":     "root",
-    "password": "YOUR_MySQL_PASSWORD",
-    "database": "urban_mobility",
+    "host":     os.environ.get("MYSQL_HOST",     "localhost"),
+    "port":     int(os.environ.get("MYSQL_PORT", 3306)),
+    "user":     os.environ.get("MYSQL_USER",     "root"),
+    "password": os.environ.get("MYSQL_PASSWORD", ""),   # ← set this
+    "database": os.environ.get("MYSQL_DATABASE", "urban_mobility"),
     "charset":  "utf8mb4",
 }
 ```
+ 
+**Running locally**  set the `MYSQL_PASSWORD` environment variable in your terminal before starting anything:
+ 
+```bash
+# macOS / Linux
+export MYSQL_PASSWORD="your_mysql_password"
+ 
+# Windows (Command Prompt)
+set MYSQL_PASSWORD=your_mysql_password
+ 
+# Windows (PowerShell)
+$env:MYSQL_PASSWORD="your_mysql_password"
+```
+ 
+Alternatively, replace the empty string default directly in `config.py` for local development, just make sure you do not share it anywhere else.
 
+```
 ### 3 Install dependencies
 
 ```bash
