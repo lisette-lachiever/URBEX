@@ -10,7 +10,7 @@ Key design decisions we made:
     across requests instead of opening a new connection per request.
   - Aggregation cache: expensive GROUP BY results are cached in memory
     after the first request so every subsequent chart load is instant.
-  - Single hot table: all dashboard queries run against trip_metrics only —
+  - Single hot table: all dashboard queries run against trip_metrics only 
     no JOINs needed for aggregations because we denormalised the data
     during the pipeline phase.
   - Late materialisation for the trip explorer: we find the 25 trip_ids
@@ -46,7 +46,7 @@ CORS(app, resources={r"/api/*": {"origins": "*"}})
 #
 # We also fixed the connection-checkout logic: previously we called
 # conn.ping(reconnect=True) on EVERY checkout, which sends a packet to MySQL
-# and waits for a reply — 11 extra round-trips on every page load. Now we
+# and waits for a reply  11 extra round-trips on every page load. Now we
 # only ping a connection that has been idle for more than _PING_AFTER_SECS
 # seconds. Most checkouts skip the ping entirely.
 
@@ -61,10 +61,13 @@ _PING_AFTER_SECS = 30          # only ping if idle for more than 30 seconds
 
 
 def _fill_pool():
-    """We open _POOL_SIZE connections and put them into the pool queue."""
+    """We open _POOL_SIZE connections and put them into the pool queue.
+    If MySQL is not available yet we skip silently so the app can still start."""
     for _ in range(_POOL_SIZE):
         try:
-            _pool.put_nowait(get_connection())
+            conn = get_connection()
+            if conn is not None:           # only add valid connections
+                _pool.put_nowait(conn)
         except Exception as e:
             print(f"[POOL] Warning: {e}")
 
@@ -74,16 +77,19 @@ def _get_conn():
     We check out a connection from the pool. If the pool is empty we open
     a fresh connection as a fallback. We only ping the connection if it has
     been idle for more than _PING_AFTER_SECS to avoid unnecessary round-trips.
+    Returns None if MySQL is not available yet.
     """
     global _pool_ready
-    # Lazy initialisation — fill the pool on the first request
+    # Lazy initialisation  fill the pool on the first request
     if not _pool_ready:
         with _pool_init_lock:
             if not _pool_ready:
                 _fill_pool()
                 _pool_ready = True
     try:
-        conn = _pool.get(timeout=10)
+        conn = _pool.get(timeout=2)        # reduced timeout so we fail fast if pool is empty
+        if conn is None:
+            return None
         conn_id = id(conn)
 
         # Only ping connections that have been idle for a while.
@@ -93,18 +99,20 @@ def _get_conn():
             try:
                 conn.ping(reconnect=True)
             except Exception:
-                # If ping fails the connection is dead — open a fresh one
+                # If ping fails the connection is dead  open a fresh one
                 conn = get_connection()
 
         _conn_last_used[id(conn)] = time.time()
         return conn
     except queue.Empty:
-        # Pool is exhausted — open a temporary connection rather than blocking
-        return get_connection()
+        # Pool is empty  MySQL may not be ready yet, return None gracefully
+        return None
 
 
 def _return_conn(conn):
     """We return a connection to the pool. If the pool is full we close it."""
+    if conn is None:
+        return
     try:
         _pool.put_nowait(conn)
     except queue.Full:
@@ -116,8 +124,11 @@ def _q(sql, params=()):
     We run a SELECT and return all rows as a list of dicts.
     We always check out from the pool and return to the pool in the finally
     block so connections are never leaked even if the query raises.
+    Returns an empty list if MySQL is not available yet.
     """
     conn = _get_conn()
+    if conn is None:                       # no DB yet  return empty gracefully
+        return []
     try:
         with conn.cursor() as cur:
             cur.execute(sql, params)
@@ -156,7 +167,7 @@ def _agg_cached(key: str, compute_fn):
     compute_fn(), cache the result, and return it.
 
     We use a double-checked lock: we read without the lock (fast path) and
-    only acquire it to write — so cache hits never block each other.
+    only acquire it to write  so cache hits never block each other.
     """
     with _cache_lock:
         if key in _AGG_CACHE:
@@ -209,7 +220,7 @@ def _get_total(fhash: str, filters: dict) -> int:
     pagination controls in the trip explorer.
 
     For the unfiltered case we read the approximate row count from
-    information_schema.tables — MySQL updates this in near-real-time and
+    information_schema.tables  MySQL updates this in near-real-time and
     returning it costs about 0ms (no row scan). This is the standard MySQL
     trick for fast COUNT(*) on large InnoDB tables.
 
@@ -223,7 +234,7 @@ def _get_total(fhash: str, filters: dict) -> int:
             return _COUNT_CACHE[fhash]
 
     if not filters:
-        # Use the engine's own stats — returns in ~0ms, no row scan
+        # Use the engine's own stats  returns in ~0ms, no row scan
         row   = _one("""
             SELECT table_rows AS n
             FROM information_schema.tables
@@ -231,7 +242,7 @@ def _get_total(fhash: str, filters: dict) -> int:
               AND table_name   = 'trip_metrics'
         """)
         total = int(row.get('n') or 0)
-        if total < 100:   # fresh or freshly-loaded table — stats may lag
+        if total < 100:   # fresh or freshly-loaded table  stats may lag
             row   = _one("SELECT COUNT(*) AS n FROM trip_metrics")
             total = int(row.get('n', 0))
     else:
@@ -244,15 +255,15 @@ def _get_total(fhash: str, filters: dict) -> int:
 
 
 # ===========================================================================
-# LATE MATERIALISATION — trip explorer pagination
+# LATE MATERIALISATION  trip explorer pagination
 # ===========================================================================
 # We split the trip explorer query into two steps:
 #
 #   Step 1: index-only scan on trip_metrics to find the 25 trip_ids
-#           we want for this page. Cost: tiny — only touches the index.
+#           we want for this page. Cost: tiny  only touches the index.
 #
 #   Step 2: fetch display columns for those 25 rows by joining trips and
-#           vendors on the primary key. Cost: O(25) — not O(1.4M).
+#           vendors on the primary key. Cost: O(25)  not O(1.4M).
 #
 # Previously a single query sorted 1.4M rows and joined on every one. This
 # two-step approach cuts the join cost from O(n) to O(page_size).
@@ -295,7 +306,7 @@ def _fetch_display_rows(trip_ids):
 
 
 # ===========================================================================
-# AGGREGATION FUNCTIONS — all single-table queries on trip_metrics
+# AGGREGATION FUNCTIONS  all single-table queries on trip_metrics
 # ===========================================================================
 # Every function here runs a GROUP BY on trip_metrics only. No JOINs needed
 # for charts because we denormalised all the required columns into that table
@@ -338,7 +349,7 @@ def _compute_hourly():
     return [dict(r) for r in rows]
 
 
-# Day name lookup — we use a plain list so index 0 = Monday matches Python's weekday()
+# Day name lookup  we use a plain list so index 0 = Monday matches Python's weekday()
 _DAY_NAMES = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']
 
 def _compute_weekday():
@@ -360,7 +371,7 @@ def _compute_weekday():
     return result
 
 
-# Month name lookup — index 0 is unused so we can index by actual month number (1-12)
+# Month name lookup  index 0 is unused so we can index by actual month number (1-12)
 _MONTH_NAMES = ['','Jan','Feb','Mar','Apr','May','Jun',
                 'Jul','Aug','Sep','Oct','Nov','Dec']
 
@@ -419,7 +430,7 @@ def _compute_passengers():
 def _compute_speed_dist():
     """
     We bucket trip speeds into 5 km/h intervals and count how many trips
-    fall in each bucket. We cap at 120 km/h — our validation rejects faster
+    fall in each bucket. We cap at 120 km/h  our validation rejects faster
     trips as GPS errors so nothing should appear above that anyway.
     """
     rows = _q("""
@@ -436,7 +447,7 @@ def _compute_speed_dist():
 def _compute_distance_dist():
     """
     We bucket trip distances into 1 km intervals and count trips per bucket.
-    We cap at 50 km — the NYC dataset has very few trips beyond that.
+    We cap at 50 km  the NYC dataset has very few trips beyond that.
     """
     rows = _q("""
         SELECT FLOOR(distance_km) AS bucket_km,
@@ -538,7 +549,7 @@ def _compute_top_zones():
     We round pickup coordinates to 2 decimal places (≈1.1 km grid cells)
     and count how many trips started in each cell. We return the top 50
     to give the map page enough data to build a meaningful heatmap.
-    This query reads from trip_locations — the only chart that does so.
+    This query reads from trip_locations  the only chart that does so.
     """
     rows = _q("""
         SELECT ROUND(pickup_latitude,  2) AS lat,
@@ -591,7 +602,7 @@ def trips():
     return jsonify({"data": out, "total": total, "page": page, "per_page": per_page})
 
 
-# --- Chart endpoints — all cached after the first request ---
+# --- Chart endpoints  all cached after the first request ---
 
 @app.route('/api/overview')
 def overview():
@@ -664,7 +675,7 @@ def warmup():
     on 1.4M rows simultaneously.
 
     Previously the frontend called warmup fire-and-forget (no await) and
-    then immediately fired all 11 chart requests — so warmup was still
+    then immediately fired all 11 chart requests  so warmup was still
     running while the chart requests arrived. Now we await it and the
     dashboard cold-load drops from ~8 seconds to ~1 second.
     """
@@ -673,7 +684,7 @@ def warmup():
         import concurrent.futures
         # We compute all aggregations in parallel using a thread pool.
         # This is safe because each function opens its own connection
-        # from the pool and they all read — no writes happen here.
+        # from the pool and they all read  no writes happen here.
         jobs = [
             ('overview',        _compute_overview),
             ('hourly',          _compute_hourly),
@@ -698,10 +709,9 @@ def warmup():
 
 @app.route('/api/health')
 def health():
-    return jsonify({
-        "ok": True,
-        "time": time.time()
-    })
+    """We expose a simple health check endpoint the frontend pings before loading."""
+    row = _one("SELECT COUNT(*) AS n FROM trip_metrics")
+    return jsonify({"ok": True, "time": time.time(), "trips_in_db": int(row.get('n', 0))})
 
 
 # ===========================================================================
@@ -831,5 +841,4 @@ def static_files(filename):
 
 
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, threaded=True)
+    app.run(host="0.0.0.0", port=5000, threaded=True)
