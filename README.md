@@ -247,3 +247,10 @@ app.run(host="0.0.0.0", port=5001, threaded=True)
 | Gyann Caleb | [@AR-JUNA](https://github.com/AR-JUNA) |
 | Moulaika Mugeni | [@mmugeni](https://github.com/mmugeni) |
 | Lisette Mukiza | [@lisette-lachiever](https://github.com/lisette-lachiever) |
+
+---
+
+| | |
+|---|---|
+| Video Walkthrough | [ Video Walkthrough]() |
+| Team Participation Sheet |[Team Participation Sheet](https://docs.google.com/spreadsheets/d/19MGYVmgUmIsozV-u2tsdzMtGmiu4Bv7VII-VFWYoOuE/edit?usp=sharing)|
