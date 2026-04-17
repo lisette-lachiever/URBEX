@@ -129,7 +129,7 @@ $env:MYSQL_PASSWORD="your_mysql_password"
  
 Alternatively, replace the empty string default directly in `config.py` for local development, just make sure you do not share it anywhere else.
 
-```
+
 ### 3 Install dependencies
 
 ```bash
