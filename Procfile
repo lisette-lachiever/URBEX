@@ -1,1 +1,1 @@
-web: python URBEX/backend/app.py
+web: python /backend/app.py
