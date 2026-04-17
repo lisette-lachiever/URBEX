@@ -1,1 +1,1 @@
-cd backend && gunicorn app:app --bind 0.0.0.0:$PORT
+web: PYTHONPATH=backend gunicorn app:app --bind 0.0.0.0:$PORT
