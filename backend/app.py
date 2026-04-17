@@ -698,9 +698,10 @@ def warmup():
 
 @app.route('/api/health')
 def health():
-    """We expose a simple health check endpoint the frontend pings before loading."""
-    row = _one("SELECT COUNT(*) AS n FROM trip_metrics")
-    return jsonify({"ok": True, "time": time.time(), "trips_in_db": int(row.get('n', 0))})
+    return jsonify({
+        "ok": True,
+        "time": time.time()
+    })
 
 
 # ===========================================================================
