@@ -61,13 +61,10 @@ _PING_AFTER_SECS = 30          # only ping if idle for more than 30 seconds
 
 
 def _fill_pool():
-    """We open _POOL_SIZE connections and put them into the pool queue.
-    If MySQL is not available yet we skip silently so the app can still start."""
+    """We open _POOL_SIZE connections and put them into the pool queue."""
     for _ in range(_POOL_SIZE):
         try:
-            conn = get_connection()
-            if conn is not None:           # only add valid connections
-                _pool.put_nowait(conn)
+            _pool.put_nowait(get_connection())
         except Exception as e:
             print(f"[POOL] Warning: {e}")
 
@@ -77,7 +74,6 @@ def _get_conn():
     We check out a connection from the pool. If the pool is empty we open
     a fresh connection as a fallback. We only ping the connection if it has
     been idle for more than _PING_AFTER_SECS to avoid unnecessary round-trips.
-    Returns None if MySQL is not available yet.
     """
     global _pool_ready
     # Lazy initialisation  fill the pool on the first request
@@ -87,9 +83,7 @@ def _get_conn():
                 _fill_pool()
                 _pool_ready = True
     try:
-        conn = _pool.get(timeout=2)        # reduced timeout so we fail fast if pool is empty
-        if conn is None:
-            return None
+        conn = _pool.get(timeout=10)
         conn_id = id(conn)
 
         # Only ping connections that have been idle for a while.
@@ -105,14 +99,12 @@ def _get_conn():
         _conn_last_used[id(conn)] = time.time()
         return conn
     except queue.Empty:
-        # Pool is empty  MySQL may not be ready yet, return None gracefully
-        return None
+        # Pool is exhausted  open a temporary connection rather than blocking
+        return get_connection()
 
 
 def _return_conn(conn):
     """We return a connection to the pool. If the pool is full we close it."""
-    if conn is None:
-        return
     try:
         _pool.put_nowait(conn)
     except queue.Full:
@@ -124,11 +116,8 @@ def _q(sql, params=()):
     We run a SELECT and return all rows as a list of dicts.
     We always check out from the pool and return to the pool in the finally
     block so connections are never leaked even if the query raises.
-    Returns an empty list if MySQL is not available yet.
     """
     conn = _get_conn()
-    if conn is None:                       # no DB yet  return empty gracefully
-        return []
     try:
         with conn.cursor() as cur:
             cur.execute(sql, params)
